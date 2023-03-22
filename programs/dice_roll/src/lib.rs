@@ -11,7 +11,6 @@ use anchor_lang::solana_program::{
 use std::mem::size_of;
 use std::str::FromStr;
 
-use thiserror::Error;
 use pyth_client;
 
 const WSOL: &'static str = "So11111111111111111111111111111111111111112";
@@ -34,6 +33,15 @@ pub mod dice_roll {
       accts.state.authority = accts.authority.key();
       accts.state.gang_mint = accts.gang_mint.key();
       accts.state.usdc_mint = accts.usdc_mint.key();
+
+      invoke(
+        &system_instruction::transfer(&accts.authority.key(), &accts.pool_sol_vault.key(), Rent::get()?.minimum_balance(0)),
+        &[
+            accts.authority.to_account_info(),
+            accts.pool_sol_vault.to_account_info(),
+            accts.system_program.to_account_info(),
+        ],
+      )?;
       Ok(())
     }
 
@@ -108,7 +116,7 @@ pub mod dice_roll {
       let signer_seeds: &[&[&[u8]]] = &[&[STATE_SEED.as_ref(), &[*ctx.bumps.get("state").unwrap()]]];
       if bet_result > 5 { //win
         invoke_signed(
-          &system_instruction::transfer(&accts.pool_sol_vault.key(), &accts.authority.key(), bet_amount),
+          &system_instruction::transfer(&accts.pool_sol_vault.key(), &accts.authority.key(), bet_prize),
           &[
               accts.pool_sol_vault.to_account_info(),
               accts.authority.to_account_info(),
@@ -162,7 +170,7 @@ pub mod dice_roll {
 
       invoke_signed(
         &system_instruction::transfer(&accts.pool_sol_vault.key(), &accts.authority.key(), 
-        accts.pool_sol_vault.to_account_info().lamports()),
+        accts.pool_sol_vault.lamports() - Rent::get()?.minimum_balance(0)),
         &[
             accts.pool_sol_vault.to_account_info(),
             accts.authority.to_account_info(),
@@ -181,8 +189,8 @@ pub mod dice_roll {
         CpiContext::new(
           accts.token_program.to_account_info(),
           Transfer {
-              from: accts.user_token_account.to_account_info(),
-              to: accts.pool_token_account.to_account_info(),
+              from: accts.pool_token_account.to_account_info(),
+              to: accts.user_token_account.to_account_info(),
               authority: accts.state.to_account_info(),
           },
         ).with_signer(signer_seeds),
