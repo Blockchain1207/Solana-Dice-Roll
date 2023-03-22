@@ -98,11 +98,13 @@ export const placeSolBet = async (user: User, amount: number) => {
 
 export const depositSol = async (admin: User, amount: number) => {
   const vaultKey = await getVaultKey();
+  const stateKey = await getStateKey();
   console.log('before sol bal: ', await program.provider.connection.getBalance(admin.publicKey));
   let res = await program.methods
     .depositSol(new BN(amount))
     .accounts({
       authority: admin.publicKey,
+      state: stateKey,
       poolSolVault: vaultKey,
       systemProgram: SystemProgram.programId
     })

@@ -23,7 +23,16 @@ const MIN_SOL_BET: u64 = 1_000_000_000; // 1 sol
 const MAX_SOL_BET: u64 = 50_000_000_000; // 50 sol
 const RTP: u64 = 80;
 
+
+#[cfg(feature="localnet")]
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+
+#[cfg(feature="devnet")]
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+
+#[cfg(feature="mainnet")]
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+
 #[program]
 pub mod dice_roll {
     use super::*;
@@ -47,9 +56,12 @@ pub mod dice_roll {
 
     pub fn place_token_bet(ctx: Context<PlaceTokenBet>, bet_amount: u64) -> Result<()> {
       let accts = ctx.accounts;
+      
       require!(accts.bet_token_mint.key().eq(&accts.state.gang_mint) || accts.bet_token_mint.key().eq(&accts.state.usdc_mint)
       , CustomError::InvalidToken); 
-      require!(bet_amount >= MIN_BET && bet_amount <= MAX_BET, CustomError::InvalidParameter); 
+      
+      require!(bet_amount >= MIN_BET && bet_amount <= MAX_BET, CustomError::InvalidAmount); 
+
       let pyth_price_info = &accts.sol_pyth_account;
       let pyth_price_data = &pyth_price_info.try_borrow_data()?;
       let pyth_price = pyth_client::cast::<pyth_client::Price>(pyth_price_data);
@@ -96,7 +108,7 @@ pub mod dice_roll {
 
     pub fn place_sol_bet(ctx: Context<PlaceSolBet>, bet_amount: u64) -> Result<()> {
       let accts = ctx.accounts;
-      require!(bet_amount >= MIN_SOL_BET && bet_amount <= MAX_SOL_BET, CustomError::InvalidParameter); 
+      require!(bet_amount >= MIN_SOL_BET && bet_amount <= MAX_SOL_BET, CustomError::InvalidAmount); 
       let pyth_price_info = &accts.sol_pyth_account;
       let pyth_price_data = &pyth_price_info.try_borrow_data()?;
       let pyth_price = pyth_client::cast::<pyth_client::Price>(pyth_price_data);
@@ -296,7 +308,12 @@ pub struct PlaceSolBet<'info> {
 pub struct DepositSol<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-
+    #[account(
+      seeds = [STATE_SEED],
+      bump,
+      has_one = authority
+    )]
+    pub state: Account<'info, State>,
     #[account(mut, seeds = [VAULT_SEED], bump)]
     /// CHECK: this is not dangerous
     pub pool_sol_vault: AccountInfo<'info>,
@@ -310,6 +327,7 @@ pub struct DepositToken<'info> {
     #[account(
       seeds = [STATE_SEED],
       bump,
+      has_one = authority
     )]
     pub state: Account<'info, State>,
     #[account(mut, associated_token::authority = state, associated_token::mint = bet_token_mint)]
@@ -378,9 +396,20 @@ pub enum CustomError {
 
     #[msg("Input Invalid Token")]
     InvalidToken,
+
+    #[msg("Input Invalid Amount")]
+    InvalidAmount,
     
+    #[msg("Input Invalid Mint")]
+    InvalidMint,
+
+    #[msg("Input Invalid Account")]
+    InvalidAccount,
 }
 
+/*
+  Event to retrieve the bet result
+ */
 #[event]
 pub struct BetResultEvent {
   pub is_win: bool,
