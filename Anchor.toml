@@ -1,3 +1,11 @@
+
+[test.validator]
+url = "https://api.mainnet-beta.solana.com"
+
+# sol pyth_account
+[[test.validator.clone]]
+address = "H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4AQJEG"
+
 [features]
 seeds = false
 skip-lint = false

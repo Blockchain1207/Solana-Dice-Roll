@@ -10,31 +10,38 @@ import {
 import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddress
+  getAssociatedTokenAddress,
+  createMint,
+  mintTo
 } from "@solana/spl-token";
 import * as anchor from "@project-serum/anchor";
-import { Solminer } from "../target/types/solminer";
+import { DiceRoll } from "../target/types/dice_roll";
 import * as Constants from "./constants";
 import { User } from "./user";
 import { assert } from "chai";
 import BN from "bn.js";
 
+const SOL_PYTH_ACC = new PublicKey("H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4AQJEG");
 const program = anchor.workspace
-  .Solminer as anchor.Program<Solminer>;
+  .DiceRoll as anchor.Program<DiceRoll>;
 
-export const initializeProgram = async (admin: User) => {
-
-  let settingsKey = await getSettingsKey();
-  console.log("key =", settingsKey.toBase58());
-  const poolKey = await getPoolKey();
+export const initializeProgram = async (admin: User, gangMint: PublicKey, usdcMint: PublicKey) => {
+  const stateKey = await getStateKey();
+  let poolGangTokenAccount = await getAssociatedTokenAddress(gangMint, stateKey, true);
+  let poolUsdcTokenAccount = await getAssociatedTokenAddress(usdcMint, stateKey, true);
+  const vaultKey = await getVaultKey();
   let res = await program.methods
     .initialize()
     .accounts({
-      admin: admin.publicKey,
-      settings: settingsKey,
-      pool: poolKey,
-      devWallet: new PublicKey(Constants.DEV_WALLET),
-      marketingWallet: new PublicKey(Constants.MARKETING_WALLET),
+      authority: admin.publicKey,
+      state: stateKey,
+      gangMint,
+      usdcMint,
+      poolGangTokenAccount,
+      poolUsdcTokenAccount,
+      poolSolVault: vaultKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       rent: SYSVAR_RENT_PUBKEY
     })
@@ -43,183 +50,127 @@ export const initializeProgram = async (admin: User) => {
   return res;
 };
 
-export const initBlacklist = async (admin: User) => {
+export const placeTokenBet = async (user: User, tokenMint: PublicKey, amount: number) => {
+  const stateKey = await getStateKey();
+  let poolTokenAccount = await getAssociatedTokenAddress(tokenMint, stateKey, true);
+  let userTokenAccount = await getAssociatedTokenAddress(tokenMint, user.publicKey);
+  console.log('before bet token bal: ', await program.provider.connection.getTokenAccountBalance(userTokenAccount));
+  let tx = await program.methods
+    .placeTokenBet(new BN(amount))
+    .accounts({
+      authority: user.publicKey,
+      state: stateKey,
+      solPythAccount: SOL_PYTH_ACC,
+      poolTokenAccount,
+      userTokenAccount,
+      betTokenMint: tokenMint,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+    })
+    .signers([user.keypair])
+    .rpc();
+  console.log('before bet token bal: ', await program.provider.connection.getTokenAccountBalance(userTokenAccount));
+  //let res = await program.provider.connection.simulateTransaction(tx, [user.keypair]);
+  //  console.log('sim res =', res);
+  return tx;
+};
 
-  let settingsKey = await getSettingsKey();
-  const poolKey = await getPoolKey();
-
-  const blacklistKey = await getBlacklistKey();
+export const placeSolBet = async (user: User, amount: number) => {
+  const stateKey = await getStateKey();
+  const vaultKey = await getVaultKey();
+  console.log('before sol bal: ', await program.provider.connection.getBalance(user.publicKey));
   let res = await program.methods
-    .initBlacklist(
-    )
+    .placeSolBet(new BN(amount))
     .accounts({
-      admin: admin.publicKey,
-      settings: settingsKey,
-      blacklist: blacklistKey,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY
+      authority: user.publicKey,
+      state: stateKey,
+      solPythAccount: SOL_PYTH_ACC,
+      poolSolVault: vaultKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId
     })
-    .signers([admin.keypair])
+    .signers([user.keypair])
     .rpc();
+    console.log('after sol bal: ', await program.provider.connection.getBalance(user.publicKey));
   return res;
 };
 
-export const createUserStateInstruction = async (
-  payer: User,
-  userKey: PublicKey,
-  userStateKey: PublicKey
-) => {
-  return await program.methods
-    .initUserState(userKey)
+export const depositSol = async (admin: User, amount: number) => {
+  const vaultKey = await getVaultKey();
+  console.log('before sol bal: ', await program.provider.connection.getBalance(admin.publicKey));
+  let res = await program.methods
+    .depositSol(new BN(amount))
     .accounts({
-      payer: payer.publicKey,
-      settings: await getSettingsKey(),
-      userState: userStateKey,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY,
+      authority: admin.publicKey,
+      poolSolVault: vaultKey,
+      systemProgram: SystemProgram.programId
     })
-    .instruction();
+    .signers([admin.keypair])
+    .rpc();
+  console.log('after sol bal: ', await program.provider.connection.getBalance(admin.publicKey));
+  return res;
 };
-
-export const deposit = async (user: User, solAmount: number, refAddress: PublicKey) => {
-  const settings = await getSettings();
-  if (!settings) throw new Error('Please init program');
-  console.log("settings =", settings);
-
-  let userStateKey = await getUserStateKey(user.publicKey);
-  let refUserKey = refAddress;
-
-  const tx = new Transaction();
-  let userStateData = await program.account.userState.fetchNullable(userStateKey);
-  if (!userStateData) {
-    tx.add(await createUserStateInstruction(user, user.publicKey, userStateKey));
-  } else {
-    if(userStateData.referrer.toBase58() !== PublicKey.default.toBase58()) {
-      refUserKey = userStateData.referrer;
-    }
-  }
-
-  let refUserStateKey = await getUserStateKey(refUserKey);
-  let refUserStateData = await program.account.userState.fetchNullable(refUserStateKey);
-  if (!refUserStateData) {
-    tx.add(await createUserStateInstruction(user, refUserKey, refUserStateKey));
-  }
-  
-  let seedKey = Keypair.generate().publicKey;
-  let investDataKey = await getInvestDataKey(user.publicKey, seedKey);
-  tx.add(await program.methods
-    .deposit(
-      new BN(solAmount * LAMPORTS_PER_SOL), 
-      seedKey
-    )
+export const depositToken = async (user: User, tokenMint: PublicKey, amount: number) => {
+  const stateKey = await getStateKey();
+  let poolTokenAccount = await getAssociatedTokenAddress(tokenMint, stateKey, true);
+  let userTokenAccount = await getAssociatedTokenAddress(tokenMint, user.publicKey, true);
+  console.log('before deposit token bal: ', await program.provider.connection.getTokenAccountBalance(userTokenAccount));
+  let res = await program.methods
+    .depositToken(new BN(amount))
     .accounts({
-      user: user.publicKey,
-      settings: await getSettingsKey(),
-      devWallet: settings.account.devWallet,
-      pool: settings.account.pool,
-      userState: userStateKey,
-      investData: investDataKey,
-      referrer: refUserKey,
-      refUserState: refUserStateKey,
-      lastDepositUser: settings.account.lastDepositUser,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY
+      authority: user.publicKey,
+      state: stateKey,
+      poolTokenAccount,
+      userTokenAccount,
+      betTokenMint: tokenMint,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     })
-    .instruction());
-  
-  //let txHash = await sendAndConfirmTransaction(program.provider.connection, tx, [user.keypair]);
-  let txHash = await program.provider.connection.simulateTransaction(tx, [user.keypair]);
-  console.log("txHash =", txHash);
-
-  const contractBalance = (await program.provider.connection.getBalance(settings.account.pool)).toFixed();
-  console.log("contractBalance =", Number.parseFloat(contractBalance) / LAMPORTS_PER_SOL);
-
-  const devWalletBalance = (await program.provider.connection.getBalance(settings.account.devWallet)).toFixed();
-  console.log("devWalletBalance =", Number.parseFloat(devWalletBalance) / LAMPORTS_PER_SOL);
-  return investDataKey;
+    .signers([user.keypair])
+    .rpc();
+  console.log('after deposit token bal: ', await program.provider.connection.getTokenAccountBalance(userTokenAccount));
+  return res;
 };
-
-export const unstake = async (user: User, investDataKey: PublicKey) => {
-  const settings = await getSettings();
-  if (!settings) throw new Error('Please init program');
-  let userStateKey = await getUserStateKey(user.publicKey);
- 
-  let userStateData = await program.account.userState.fetchNullable(userStateKey);
-  if (!userStateData) {
-    throw new Error('Please deposit');;
-  } 
-  
-  const userBalance = (await program.provider.connection.getBalance(user.publicKey)).toFixed();
-  console.log("userBalance =", Number.parseFloat(userBalance) / LAMPORTS_PER_SOL);
-  
-  const blacklistKey = await getBlacklistKey();
-  let tx = new Transaction();
-  tx.add(await program.methods
-    .unstake()
+export const withdrawSol = async (admin: User) => {
+  const vaultKey = await getVaultKey();
+  const stateKey = await getStateKey();
+  console.log('before sol bal: ', await program.provider.connection.getBalance(admin.publicKey));
+  let res = await program.methods
+    .withdrawSol()
     .accounts({
-      user: user.publicKey,
-      settings: settings.publicKey,
-      blacklist: blacklistKey,
-      pool: settings.account.pool,
-      investData: investDataKey,
-      userState: userStateKey,
-      devWallet: settings.account.devWallet,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY
+      authority: admin.publicKey,
+      state: stateKey,
+      poolSolVault: vaultKey,
+      systemProgram: SystemProgram.programId
     })
-    .instruction());
-  
-  let txHash = await sendAndConfirmTransaction(program.provider.connection, tx, [user.keypair]);
-  console.log("txHash =", txHash);
+    .signers([admin.keypair])
+    .rpc();
+  // console.log('sim res =', await program.provider.connection.simulateTransaction(res, [admin.keypair]));
 
-  const contractBalance = (await program.provider.connection.getBalance(settings.account.pool)).toFixed();
-  console.log("contractBalance =", Number.parseFloat(contractBalance) / LAMPORTS_PER_SOL);
-
-  const devWalletBalance = (await program.provider.connection.getBalance(settings.account.devWallet)).toFixed();
-  console.log("devWalletBalance =", Number.parseFloat(devWalletBalance) / LAMPORTS_PER_SOL);
-
-  const userNewBalance = (await program.provider.connection.getBalance(user.publicKey)).toFixed();
-  console.log("User Balance Change = +", (Number.parseFloat(userNewBalance) - Number.parseFloat(userBalance)) / LAMPORTS_PER_SOL);
-
-  return txHash;
+  console.log('after sol bal: ', await program.provider.connection.getBalance(admin.publicKey));
+  return res;
 };
-
-export const compound = async (user: User, investDataKey: PublicKey) => {
-  const settings = await getSettings();
-  if (!settings) throw new Error('Please init program');
-  let userStateKey = await getUserStateKey(user.publicKey);
- 
-  let userStateData = await program.account.userState.fetchNullable(userStateKey);
-  if (!userStateData) {
-    throw new Error('Please deposit');;
-  } 
-
-  let tx = new Transaction();
-  tx.add(await program.methods
-    .compound()
+export const withdrawToken = async (user: User, tokenMint: PublicKey) => {
+  const stateKey = await getStateKey();
+  let poolTokenAccount = await getAssociatedTokenAddress(tokenMint, stateKey, true);
+  let userTokenAccount = await getAssociatedTokenAddress(tokenMint, user.publicKey, true);
+  console.log('before withdraw token bal: ', await program.provider.connection.getTokenAccountBalance(userTokenAccount));
+  let res = await program.methods
+    .withdrawToken()
     .accounts({
-      user: user.publicKey,
-      settings: settings.publicKey,
-      pool: settings.account.pool,
-      investData: investDataKey,
-      marketingWallet: settings.account.marketingWallet,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY
+      authority: user.publicKey,
+      state: stateKey,
+      poolTokenAccount,
+      userTokenAccount,
+      betTokenMint: tokenMint,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     })
-    .instruction());
-  
-  let txHash = await sendAndConfirmTransaction(program.provider.connection, tx, [user.keypair]);
-  console.log("txHash =", txHash);
-
-  const contractBalance = (await program.provider.connection.getBalance(settings.account.pool)).toFixed();
-  console.log("contractBalance =", Number.parseFloat(contractBalance) / LAMPORTS_PER_SOL);
-
-  const investData = await program.account.investData.fetch(investDataKey);
- // console.log("rewardAmount =", investData.rewardAmount.toString());
-
-  const devWalletBalance = (await program.provider.connection.getBalance(settings.account.devWallet)).toFixed();
-  console.log("devWalletBalance =", Number.parseFloat(devWalletBalance) / LAMPORTS_PER_SOL);
-  return txHash;
+    .signers([user.keypair])
+    .rpc();
+  console.log('after withdraw token bal: ', await program.provider.connection.getTokenAccountBalance(userTokenAccount));
+  return res;
 };
 
 export const fetchAllData = async (type: string, options?: any) => {

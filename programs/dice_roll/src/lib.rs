@@ -70,7 +70,7 @@ pub mod dice_roll {
       let bet_prize = bet_amount * RTP / 100;
       let bet_result = (pyth_price.agg.price as u64) % 11;
       let signer_seeds: &[&[&[u8]]] = &[&[STATE_SEED.as_ref(), &[*ctx.bumps.get("state").unwrap()]]];
-      if bet_result > 5 { //win
+      if bet_result > 6 { //win
         token::transfer(
           CpiContext::new(
             accts.token_program.to_account_info(),
@@ -113,7 +113,7 @@ pub mod dice_roll {
 
       let bet_prize = bet_amount * RTP / 100;
       let bet_result = (pyth_price.agg.price as u64) % 11;
-      let signer_seeds: &[&[&[u8]]] = &[&[STATE_SEED.as_ref(), &[*ctx.bumps.get("state").unwrap()]]];
+      let signer_seeds: &[&[&[u8]]] = &[&[VAULT_SEED.as_ref(), &[*ctx.bumps.get("pool_sol_vault").unwrap()]]];
       if bet_result > 5 { //win
         invoke_signed(
           &system_instruction::transfer(&accts.pool_sol_vault.key(), &accts.authority.key(), bet_prize),
@@ -166,7 +166,8 @@ pub mod dice_roll {
     
     pub fn withdraw_sol(ctx: Context<WithdrawSol>) -> Result<()> {
       let accts = ctx.accounts;
-      let signer_seeds: &[&[&[u8]]] = &[&[STATE_SEED.as_ref(), &[*ctx.bumps.get("state").unwrap()]]];
+      require!(accts.pool_sol_vault.lamports() > Rent::get()?.minimum_balance(0), CustomError::InvalidParameter);
+      let signer_seeds: &[&[&[u8]]] = &[&[VAULT_SEED.as_ref(), &[*ctx.bumps.get("pool_sol_vault").unwrap()]]];
 
       invoke_signed(
         &system_instruction::transfer(&accts.pool_sol_vault.key(), &accts.authority.key(), 
@@ -230,7 +231,7 @@ pub struct Initialize<'info> {
       associated_token::mint = usdc_mint
     )]
     pub pool_usdc_token_account: Account<'info, TokenAccount>,
-    #[account(seeds = [VAULT_SEED], bump)]
+    #[account(mut, seeds = [VAULT_SEED], bump)]
     /// CHECK: this is not dangerous
     pub pool_sol_vault: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -258,7 +259,7 @@ pub struct PlaceTokenBet<'info> {
     pub pool_token_account: Account<'info, TokenAccount>,
     #[account(mut, associated_token::authority = authority, associated_token::mint = bet_token_mint)]
     pub user_token_account: Account<'info, TokenAccount>,
-    pub bet_token_mint: Account<'info, TokenAccount>,
+    pub bet_token_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
@@ -315,7 +316,7 @@ pub struct DepositToken<'info> {
     pub pool_token_account: Account<'info, TokenAccount>,
     #[account(mut, associated_token::authority = authority, associated_token::mint = bet_token_mint)]
     pub user_token_account: Account<'info, TokenAccount>,
-    pub bet_token_mint: Account<'info, TokenAccount>,
+    pub bet_token_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
@@ -353,7 +354,7 @@ pub struct WithdrawToken<'info> {
     pub pool_token_account: Account<'info, TokenAccount>,
     #[account(mut, associated_token::authority = authority, associated_token::mint = bet_token_mint)]
     pub user_token_account: Account<'info, TokenAccount>,
-    pub bet_token_mint: Account<'info, TokenAccount>,
+    pub bet_token_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
